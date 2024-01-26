@@ -1,0 +1,12 @@
+[submodule "collector"]
+	path = collector
+	url = git@github.com:ProjectLogscope/collector.git
+[submodule "ingestor"]
+	path = ingestor
+	url = git@github.com:ProjectLogscope/ingestor.git
+[submodule "query"]
+	path = query
+	url = git@github.com:ProjectLogscope/query.git
+[submodule "generator"]
+	path = generator
+	url = git@github.com:ProjectLogscope/generator.git
