@@ -1,0 +1,215 @@
+version: '3.9'
+
+networks:
+  default:
+    name: ingestor
+    driver: bridge
+    # external: true
+
+volumes:
+  datastore-elasticsearch:
+    name: datastore-elasticsearch
+    driver: local
+  shared-logs:
+    name: shared-logs
+    driver: local
+
+services:
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.11.1
+    container_name: elasticsearch
+    networks:
+      - default
+    hostname: elasticsearch
+    ports:
+      - 9200:9200
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+      restart_policy:
+        condition: on-failure
+        delay: 3s
+        max_attempts: 10
+        window: 60s
+    environment:
+      - node.name=es-node
+      - cluster.name=es-cluster
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+    volumes:
+      - type: volume
+        source: datastore-elasticsearch
+        target: /usr/share/elasticsearch/data
+        read_only: false
+        volume:
+          nocopy: false
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  
+  nats:
+    image: nats:2.10.5-alpine3.18
+    container_name: nats
+    tty: true
+    networks:
+      - default
+    hostname: nats
+    ports:
+    - 8222:8222
+    deploy:
+      resources:
+        limits:
+          cpus: '0.25'
+          memory: 500M
+      restart_policy:
+        condition: on-failure
+        delay: 3s
+        max_attempts: 10
+        window: 60s
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:8222/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  collector:
+    build:
+      context: ./collector
+      dockerfile: build/api/Dockerfile
+      args:
+        GO_VERSION: 1.21
+        ALPINE_VERSION: 3.18
+      target: final
+    container_name: collector
+    depends_on:
+      nats:
+        condition: service_healthy
+    networks:
+      - default
+    hostname: collector
+    ports:
+      - 3000:3000
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 100M
+      restart_policy:
+        condition: on-failure
+        delay: 3s
+        max_attempts: 10
+        window: 60s
+    env_file:
+      - ./environment/collector/nats.env
+      - ./environment/collector/server.env
+      - ./environment/collector/service.env
+    volumes:
+      # - type: volume
+      #   source: shared-logs
+      #   target: /service/log
+      #   read_only: false
+      #   volume:
+      #     nocopy: false
+      - type: bind
+        source: ./logs
+        target: /service/log
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
+
+  ingestor:
+    build:
+      context: ./ingestor
+      dockerfile: build/worker/Dockerfile
+      args:
+        GO_VERSION: 1.21
+        ALPINE_VERSION: 3.18
+      target: final
+    container_name: ingestor
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      nats:
+        condition: service_healthy
+    networks:
+      - default
+    hostname: ingestor
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 100M
+      restart_policy:
+        condition: on-failure
+        delay: 3s
+        max_attempts: 10
+        window: 60s
+    env_file:
+      - ./environment/ingestor/nats.env
+      - ./environment/ingestor/service.env
+      - ./environment/ingestor/worker.env
+      - ./environment/ingestor/elasticsearch.env
+    volumes:
+      # - type: volume
+      #   source: shared-logs
+      #   target: /service/log
+      #   read_only: false
+      #   volume:
+      #     nocopy: false
+      - type: bind
+        source: ./logs
+        target: /service/log
+
+  query:
+    build:
+      context: ./query
+      dockerfile: build/api/Dockerfile
+      args:
+        GO_VERSION: 1.21
+        ALPINE_VERSION: 3.18
+      target: final
+    container_name: query
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    networks:
+      - default
+    hostname: query
+    ports:
+      - 3100:3000
+    deploy:
+      resources:
+        limits:
+          cpus: '0.1'
+          memory: 100M
+      restart_policy:
+        condition: on-failure
+        delay: 3s
+        max_attempts: 10
+        window: 60s
+    env_file:
+      - ./environment/query/server.env
+      - ./environment/query/service.env
+      - ./environment/query/authorization.env
+      - ./environment/query/elasticsearch.env
+    volumes:
+      # - type: volume
+      #   source: shared-logs
+      #   target: /service/log
+      #   read_only: false
+      #   volume:
+      #     nocopy: false
+      - type: bind
+        source: ./logs
+        target: /service/log
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/healthz"]
+      interval: 5s
+      timeout: 5s
+      retries: 3
